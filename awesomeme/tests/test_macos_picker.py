@@ -220,8 +220,12 @@ def test_capture_unknown_composition_never_posts(monkeypatch):
             AXUIElementCreateApplication=lambda pid: "application",
             AXUIElementSetMessagingTimeout=lambda *args: 0,
             kAXErrorSuccess=0,
-            CGEventPost=lambda *args: posted.append(args),
         ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "Quartz",
+        types.SimpleNamespace(CGEventPost=lambda *args: posted.append(args)),
     )
     attributes = {
         ("application", "AXFocusedWindow"): "window",
