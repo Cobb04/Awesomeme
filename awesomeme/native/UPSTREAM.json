@@ -1,0 +1,8 @@
+{
+  "project": "sindresorhus/KeyboardShortcuts",
+  "revision": "772133d9dbe800fdac0473226822994c5c162c58",
+  "sha256": "55628c51d567bc2841cd6be3bcbd2a62c0f8cbb2c3b7d83747c9bedc2f3b200a",
+  "license": "MIT",
+  "changes": "Add AwesomemeHotkey.swift to the upstream module; change product to dynamic. Original archive unmodified.",
+  "build_compatibility": "On build copy only: replace SwiftUI @Entry with equivalent EnvironmentKey; omit #Preview blocks because CLT has no SwiftUI macro plugins. Runtime hotkey implementation unchanged."
+}

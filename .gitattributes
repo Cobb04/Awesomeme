@@ -1,0 +1,2 @@
+# Context lines in archived patch files deliberately contain a single space.
+*.patch -whitespace

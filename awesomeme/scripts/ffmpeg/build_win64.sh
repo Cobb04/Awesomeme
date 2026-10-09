@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# 交叉编译裁剪版 ffmpeg（win64 静态单文件）——TG 导入 webm->webp 专用
+# CI: .github/workflows/ffmpeg-win64.yml 缓存未命中时执行；本地可在 WSL/MSYS2 复跑
+# 产物: build/ffmpeg-win64/out/ffmpeg.exe（build.py ensure_ffmpeg 从工作区
+#       ffmpeg-win64/ 或本路径拾取，见 scripts/build.py）
+set -euo pipefail
+
+FFMPEG_VERSION="7.1"
+FFMPEG_SHA256="40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6"
+LIBVPX_VERSION="1.14.1"
+LIBVPX_SHA256="901747254d80a7937c933d03bd7c5d41e8e6c883e0665fadcb172542167c7977"
+LIBWEBP_VERSION="1.4.0"
+LIBWEBP_SHA256="61f873ec69e3be1b99535634340d5bde750b2e4447caa1db9f61be3fd49ab1e5"
+
+FFMPEG_URL="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+# GitHub archive 无生成的 configure，故用官方发布 tarball
+LIBVPX_URL="https://github.com/webmproject/libvpx/archive/refs/tags/v${LIBVPX_VERSION}.tar.gz"
+LIBWEBP_URL="https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-${LIBWEBP_VERSION}.tar.gz"
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+WORK="$ROOT/build/ffmpeg-win64"
+SRC="$WORK/src"
+PREFIX="$WORK/prefix"
+DL="$WORK/dl"
+OUT="$WORK/out"
+JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
+# 单文件预算：超出即失败（安装包增量控制，见计划验收标准）
+SIZE_LIMIT=$((20 * 1024 * 1024))
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+fetch() { # <url> <sha256> <dest>
+    local url="$1" sha="$2" dest="$3"
+    if [ -f "$dest" ] && ! echo "$sha  $dest" | sha256sum -c --quiet -; then
+        echo "checksum mismatch, re-downloading: $dest"
+        rm -f "$dest"
+    fi
+    [ -f "$dest" ] || curl -fL --retry 3 --retry-delay 2 -o "$dest" "$url"
+    echo "$sha  $dest" | sha256sum -c - || die "sha256 mismatch: $dest"
+}
+
+build_libvpx() {
+    [ -f "$PREFIX/lib/libvpx.a" ] && return 0
+    echo "== libvpx ${LIBVPX_VERSION} =="
+    tar -xzf "$DL/libvpx.tar.gz" -C "$SRC"
+    cd "$SRC/libvpx-${LIBVPX_VERSION}"
+    # CROSS 必须显式传入：libvpx 的 setup_gnu_toolchain 取 ${CROSS}gcc/ar/strip/nm，
+    # 而其源码从不设置 CROSS —— 只给 --target 会退化为宿主 gcc/ar，C 对象编成 ELF
+    # （仅 nasm 成员是 win64 COFF），mingw ld 按索引打开成员时格式不符被静默跳过，
+    # 只报 undefined reference（vpx_codec_control_/vpx_codec_vp9_dx）并裁掉解码器
+    # --disable-multithread: vpx.a 无 pthread_* 引用，使 ffmpeg configure 的 libvpx
+    # 检查兜底 check_lib（只链 "-lvpx -lm"，mingw 下 pthreads_extralibs 恒为空）也可通过
+    CROSS=x86_64-w64-mingw32- ./configure --target=x86_64-win64-gcc --prefix="$PREFIX" \
+        --disable-examples --disable-tools --disable-unit-tests --disable-docs \
+        --disable-vp8 --enable-static --disable-shared --enable-small \
+        --disable-multithread
+    grep -E '^(CC|CXX|AR|STRIP)=' config.mk || true
+    # HAVE_GNU_STRIP=no: 走 Makefile 的 cp 分支保留未 strip 归档，规避 strip 改写
+    # 归档索引的已知损坏类问题（grpc#6136），与 CROSS 互为双保险
+    make HAVE_GNU_STRIP=no -j"$JOBS"
+    make install
+    # 重建归档索引，随后复刻 ffmpeg check_lib 做链接自检
+    x86_64-w64-mingw32-ranlib "$PREFIX/lib/libvpx.a" || die "libvpx.a ranlib failed"
+    cat > "$WORK/vpx_check.c" <<'EOF'
+#include <vpx/vpx_decoder.h>
+#include <vpx/vp8dx.h>
+#include <stdint.h>
+long check_vpx_codec_vp9_dx(void) { return (long) vpx_codec_vp9_dx; }
+int main(void) { int ret = 0;
+ ret |= ((intptr_t)check_vpx_codec_vp9_dx) & 0xFFFF;
+return ret; }
+EOF
+    x86_64-w64-mingw32-gcc -static -I"$PREFIX/include" -L"$PREFIX/lib" \
+        -o "$WORK/vpx_check.exe" "$WORK/vpx_check.c" -lvpx -lm \
+        2>"$WORK/vpx_check.log" ||
+    {
+        cat "$WORK/vpx_check.log" >&2
+        {
+            echo "--- libvpx diagnostics ---"
+            grep -E '^(CC|CXX|AR|LD|STRIP|NM)=|^ARFLAGS ?=' \
+                "$SRC/libvpx-${LIBVPX_VERSION}/config.mk" || true
+            head -c 8 "$PREFIX/lib/libvpx.a" | od -An -c || true
+            x86_64-w64-mingw32-objdump -f "$PREFIX/lib/libvpx.a" 2>/dev/null |
+                grep -oE 'file format [a-z0-9-]+' | sort | uniq -c || true
+            x86_64-w64-mingw32-nm -s "$PREFIX/lib/libvpx.a" 2>/dev/null |
+                grep -E 'vpx_codec_vp9_dx|vpx_codec_control_' ||
+                echo "nm -s: symbols NOT in archive index"
+            x86_64-w64-mingw32-gcc -static -I"$PREFIX/include" -L"$PREFIX/lib" \
+                -o "$WORK/vpx_check.exe" "$WORK/vpx_check.c" -lvpx -lm -Wl,-t \
+                2>&1 | grep -F libvpx || true
+            x86_64-w64-mingw32-gcc -static -I"$PREFIX/include" \
+                -o "$WORK/vpx_check2.exe" "$WORK/vpx_check.c" \
+                "$PREFIX/lib/libvpx.a" -lm 2>&1 | head -20 || true
+            x86_64-w64-mingw32-ld --version 2>&1 | head -1 || true
+        } >&2
+        die "libvpx.a link self-check failed (ffmpeg would trim libvpx_vp9_decoder)"
+    }
+    rm -f "$WORK/vpx_check.c" "$WORK/vpx_check.exe" "$WORK/vpx_check.log"
+}
+
+build_libwebp() {
+    [ -f "$PREFIX/lib/libwebp.a" ] && return 0
+    echo "== libwebp ${LIBWEBP_VERSION} =="
+    tar -xzf "$DL/libwebp.tar.gz" -C "$SRC"
+    cd "$SRC/libwebp-${LIBWEBP_VERSION}"
+    # libwebpmux 必须保留：ffmpeg libwebp_anim 编码器依赖 libwebpmux >= 0.4.0
+    ./configure --host=x86_64-w64-mingw32 --prefix="$PREFIX" \
+        --disable-shared --enable-static \
+        --disable-libwebpdemux \
+        --disable-png --disable-jpeg --disable-tiff --disable-gif --disable-wic \
+        --disable-gl --disable-sdl
+    make -j"$JOBS"
+    make install
+}
+
+build_ffmpeg() {
+    [ -f "$OUT/ffmpeg.exe" ] && return 0
+    echo "== ffmpeg ${FFMPEG_VERSION} =="
+    tar -xJf "$DL/ffmpeg.tar.xz" -C "$SRC"
+    cd "$SRC/ffmpeg-${FFMPEG_VERSION}"
+    export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    # 交叉前缀默认找 x86_64-w64-mingw32-pkg-config（mingw-w64-tools 提供，runner 未装），
+    # configure 检测失败仅 warn 进 config.log 不上屏并置 pkg_config=false，
+    # 使 libwebp 的 require_pkg_config 精确报 "not found" —— 先用原生 pkg-config 预检
+    pkg-config --exists --print-errors "libwebp >= 0.2.0" ||
+        die "libwebp.pc not found (PKG_CONFIG_PATH=$PKG_CONFIG_PATH)"
+    pkg-config --exists --print-errors "vpx >= 1.4.0" ||
+        die "vpx.pc not found (PKG_CONFIG_PATH=$PKG_CONFIG_PATH)"
+    # 只开 TG 转换所需组件（matroska 解封装 / libvpx-vp9 解码 / webp 动画编码 /
+    # scale 滤镜 / file 协议），其余全部 --disable-everything
+    ./configure \
+        --prefix="$PREFIX" \
+        --target-os=win64 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32- \
+        --pkg-config=pkg-config \
+        --pkg-config-flags=--static \
+        --extra-cflags="-I$PREFIX/include" \
+        --extra-ldflags="-static -L$PREFIX/lib" \
+        --disable-everything \
+        --disable-autodetect \
+        --disable-doc --disable-debug \
+        --disable-ffplay --disable-ffprobe \
+        --disable-network \
+        --enable-libvpx --enable-libwebp \
+        --enable-decoder=libvpx_vp9 \
+        --enable-encoder=libwebp \
+        --enable-encoder=libwebp_anim \
+        --enable-parser=vp9 \
+        --enable-demuxer=matroska \
+        --enable-muxer=webp \
+        --enable-filter=scale \
+        --enable-protocol=file \
+        --enable-bsf=vp9_superframe ||
+    {
+        # diagnose: warn()/test 失败只写 config.log 不上屏，失败时兜底输出尾部
+        tail -n 80 ffbuild/config.log >&2 || true
+        die "ffmpeg configure failed"
+    }
+    # configure 成功不等于启用：libvpx 检查失败只 warn+disable（reason 空上屏），
+    # 静默产出无解码器的 ffmpeg —— 这里硬断言，失败输出 config.log 的 vpx 线索
+    grep -q "^#define CONFIG_LIBVPX_VP9_DECODER 1" config_components.h ||
+    {
+        grep -A 4 -B 2 -i 'vpx' ffbuild/config.log >&2 || true
+        tail -n 60 ffbuild/config.log >&2 || true
+        die "ffmpeg configure did not enable libvpx_vp9_decoder"
+    }
+    make -j"$JOBS"
+    mkdir -p "$OUT"
+    cp ffmpeg.exe "$OUT/ffmpeg.exe"
+}
+
+verify_exe() {
+    local exe="$OUT/ffmpeg.exe"
+    [ -f "$exe" ] || die "missing $exe"
+    # 必须单文件自含：出现依赖 DLL 名即静态链接失败
+    local imports
+    imports=$(x86_64-w64-mingw32-objdump -p "$exe" | awk '/DLL Name/{print $3}')
+    echo "imported DLLs: $(echo $imports)"
+    if echo "$imports" | grep -qiE 'winpthread|libgcc|libstdc|libvpx|libwebp'; then
+        die "ffmpeg.exe depends on non-system DLLs, static link failed"
+    fi
+    local size
+    size=$(stat -c%s "$exe")
+    echo "ffmpeg.exe size: $size bytes"
+    if [ "$size" -gt "$SIZE_LIMIT" ]; then
+        die "ffmpeg.exe exceeds ${SIZE_LIMIT} bytes budget (got $size)"
+    fi
+    # 组件字符串存在性检查（任何平台）：解码器/编码器被 configure 裁掉时其名字
+    # 不会编进二进制，Linux CI 也能拦截，不用等 windows 侧 --verify-ffmpeg
+    local comp
+    for comp in libvpx-vp9 libwebp_anim matroska; do
+        grep -aq "$comp" "$exe" ||
+            die "ffmpeg.exe missing component string: $comp (configure trimmed it)"
+    done
+    # 组件存在性执行检查仅在能运行 PE 的环境（MSYS2/Cygwin/Windows）；
+    # Linux/WSL 交叉产物无法直接执行（Exec format error），CI 组件校验由
+    # 打包侧 windows job 的 build.py --verify-ffmpeg 对产物端到端转换兜底
+    case "$(uname -s)" in
+        MINGW* | MSYS* | CYGWIN*)
+            "$exe" -hide_banner -decoders | grep -q 'libvpx-vp9' || die "missing decoder libvpx-vp9"
+            "$exe" -hide_banner -encoders | grep -q 'libwebp_anim' || die "missing encoder libwebp_anim"
+            ;;
+    esac
+    echo "OK: $exe"
+}
+
+mkdir -p "$DL" "$SRC" "$PREFIX" "$OUT"
+fetch "$FFMPEG_URL" "$FFMPEG_SHA256" "$DL/ffmpeg.tar.xz"
+fetch "$LIBVPX_URL" "$LIBVPX_SHA256" "$DL/libvpx.tar.gz"
+fetch "$LIBWEBP_URL" "$LIBWEBP_SHA256" "$DL/libwebp.tar.gz"
+build_libvpx
+build_libwebp
+build_ffmpeg
+verify_exe

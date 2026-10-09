@@ -1,0 +1,12 @@
+# conda env create -f environment.yml
+name: awesomeme
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - -r requirements.txt
+# 三个平台的来源 Adapter 先从仓库根目录安装。
+# macOS 原生依赖和 pywebview 固定版本统一由 requirements.txt 安装。

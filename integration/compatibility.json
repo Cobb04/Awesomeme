@@ -1,0 +1,37 @@
+{
+  "upstream_commit": "3a3cad5c6a17544718ca5eb309a2ab77e7dadd3b",
+  "files": {
+    "AGENTS.md": {
+      "before": "a5f2ab41e3bd77db5e829d1690abc9e7b24ef9ea8386e4f2e4414ea342d0b98f",
+      "after": "7baf6d6dc08f58c88a9af3639bea497005c432cf999080949f4934a8252a1808"
+    },
+    "CONTRIBUTING.md": {
+      "before": "550ed56ffed8b413e88016c7e09242380473eb7458f06c329e3eae93350d0803",
+      "after": "62c8102f39ea9b7120edcd002f0dc76effb4719f23b5c5fd444f748a8466977d"
+    },
+    "README.md": {
+      "before": "c9df8700fab53acc4be47a593f5c7d5c361899edfde65933066e973a38db865e",
+      "after": "96ee44feb5172100c568ae2c5803b11652e4df1d49ddb249b33d929255c255e4"
+    },
+    "environment.yml": {
+      "before": "db062435ddb86aa6b7a3735ea2fba5c82485f23c0daefc978866eae800a7781a",
+      "after": "c7ba78f364651890467b357a18d73bd3d2ae76ac4cc3ef915bda24003323d2ee"
+    },
+    "requirements.txt": {
+      "before": "04be08b7e420f85614b09a327296468b8e1aace09b0b0a6d65eebae506cc4151",
+      "after": "37735b4fff925c1949b57c4a13bfb994e753c2f7a8544c1e98a30340390bc117"
+    },
+    "src/webui/settings.html": {
+      "before": "819f51d0b00789d223f53bbdb545a6fc09b0993e52cde789ee07b8fe757c18ca",
+      "after": "2ab93f492fd9c7c410c72342a0ceaeb4ed9ea8ed7cd2a6d0cdb5705902c93bdd"
+    },
+    "src/webui/settings.js": {
+      "before": "1f5a276357e9b60c8baa40b8d0cf48272be5693d67f9241d89c0e2779716c3fd",
+      "after": "054e64ea66971f204e1998ce40b61087f441fc4acc07f49764f433055c2e4dda"
+    },
+    "src/webui.py": {
+      "before": "4d0aaafc270c861891675dbf56aef8a9af1042c2a5c7a1841f27b598d6ef50f8",
+      "after": "d6aba5243c3c64e7e4ac5ce211da074ebe0c6434b24e68ac05a284bdf2806a7b"
+    }
+  }
+}

@@ -1,0 +1,47 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      AWESOMEME_TEST_ROOT: ${{ runner.temp }}/awesomeme-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: awesomeme/package-lock.json
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -e '.[test]'
+          python -m pip install -r awesomeme/requirements.txt
+      - name: Build frontend
+        working-directory: awesomeme
+        run: |
+          npm ci
+          npm run build
+      - name: Test source adapters
+        run: python -m pytest tests/ -q
+      - name: Test desktop modules
+        working-directory: awesomeme
+        run: python -m pytest tests/ -q
+      - name: Check frontend behavior
+        working-directory: awesomeme
+        run: |
+          node tests/fixtures/startup_gallery_probe.cjs immediate
+          node tests/fixtures/startup_gallery_probe.cjs delayed
+          node tests/fixtures/picker_probe.cjs
+          node tests/fixtures/grid_slot_probe.cjs
+          node tests/fixtures/settings_hotkey_probe.cjs

@@ -1,0 +1,12 @@
+{
+  "project": "liusheng22/export-wechat-emoji",
+  "release": "v0.3.0",
+  "source_commit": "f1196314b66eddbe4da2a8b958c8082b5945aa1f",
+  "download_url": "https://github.com/liusheng22/export-wechat-emoji/releases/download/v0.3.0/wxemoticon-aarch64-apple-darwin.tar.gz",
+  "archive_sha256": "d36cbcc546e88f3c112172688efb7845da13cc31761b5a33e2e877628f9cbb4b",
+  "binary_sha256": "fef101e48df805968715fdb7c9f954de9ac039b598bc0f5f6fd93f438b6b3996",
+  "modified": false,
+  "license_declared_by_cli": "MIT",
+  "license_source": "https://github.com/liusheng22/export-wechat-emoji/blob/f1196314b66eddbe4da2a8b958c8082b5945aa1f/cli/Cargo.toml",
+  "distribution_note": "The public source repository does not redistribute this binary. scripts/fetch_wechat_helper.py downloads the pinned upstream asset on demand. CLI license metadata does not describe all embedded component licenses; review all notices before redistributing a binary build."
+}

@@ -1,0 +1,340 @@
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -520,3 +520,9 @@
+ ## 版本管理
+ - 版本号唯一来源: `src/__init__.py` → `__version__ = "*.*.*"`
+ - `scripts/build.py` 用正则从该文件提取版本；`--version`/`--nightly` 会临时改写 `__init__.py` 构建，完成后恢复
++
++### 飞书导入
++
++修改飞书导入时，检查 SettingsApi 三个方法、WebUI 的任务锁和取消入口、settings.html 弹窗及 settings.js 轮询。后台逻辑由本地依赖 feishu_adapter.desktop.ImportJob 提供，入库仍调用 WebUI._do_import 和 ensure_import_collection。复核取消后不入库、二维码退出后清除、部分失败不自动入库；独立会话凭证只驻留内存。
++
++飞书轮询收到任务结束且 result.ids 非空时，调用已有 refresh_memes 和 refresh_collections。刷新失败不得改写导入结果。
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -192,3 +192,9 @@
+ - 新增依赖已同步 `requirements.txt` + `environment.yml`
+ - 新增功能/文件已同步 `README.md` 与 `AGENTS.md`
+ - 涉及前端改动已重新 `npx vite build`
++
++## 飞书 Adapter 集成
++
++安装依赖前将随补丁提供的 `feishu_l1_adapter-0.2.0-py3-none-any.whl` 放入 `vendor/`；requirements.txt 与 conda 环境共用此依赖入口。Adapter 源码、回归测试和协议范围见交付包；修改 Adapter 后重新构建 wheel。常规测试不使用线上会话或真实图库。
++
++飞书设置页回归须覆盖完成、部分完成及取消后已有图片入库的主窗口刷新；使用既有 refresh_memes 与 refresh_collections 桥接。
+--- a/README.md
++++ b/README.md
+@@ -185,3 +185,9 @@
+ ## 许可证
+ 
+ GPL-3.0
++
++## 飞书收藏导入
++
++设置 → 导入 → 飞书收藏表情。扫码后自动下载原图并导入，保留动图，复用图库去重。关闭设置窗口会取消任务；已入库图片保留。每次新任务需要扫码，不保存登录凭证。大量收藏的服务端返回上限尚未验证。
++
++飞书导入结束后自动刷新主窗口的表情列表和分组；部分完成或取消时，已经入库的图片也会显示。
+--- a/environment.yml
++++ b/environment.yml
+@@ -8,3 +8,4 @@
+   - pip
+   - pip:
+     - -r requirements.txt
++# 飞书 Adapter wheel 位于 vendor/，由 requirements.txt 安装。
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -27,3 +27,6 @@
+ 
+ # 打包
+ pyinstaller>=6.0.0
++
++# 飞书收藏导入（随补丁提供的本地 wheel，非 PyPI 包）
++./vendor/feishu_l1_adapter-0.2.0-py3-none-any.whl
+--- a/src/webui/settings.html
++++ b/src/webui/settings.html
+@@ -171,6 +171,11 @@
+           <svg viewBox="0 0 1024 1024" fill="currentColor"><path d="M824.8 613.2c-16-51.4-34.4-94.6-62.7-165.3C766.5 262.2 689.3 112 511.5 112 331.7 112 256.2 265.2 261 447.9c-28.4 70.8-46.7 113.7-62.7 165.3-34 109.5-23 154.8-14.6 155.8 18 2.2 70.1-82.4 70.1-82.4 0 49 25.2 112.9 79.8 159-26.4 8.1-85.7 29.9-71.6 53.8 11.4 19.3 196.2 12.3 249.5 6.3 53.3 6 238.1 13 249.5-6.3 14.1-23.8-45.3-45.7-71.6-53.8 54.6-46.2 79.8-110.1 79.8-159 0 0 52.1 84.6 70.1 82.4 8.5-1.1 19.5-46.4-14.5-155.8z"/></svg>
+         </span>
+         <span class="import-name">电脑版 QQ（QQNT 本地缓存）</span>
++      </button>
++
++      <button class="import-row" onclick="openFeishuImportDialog()">
++        <span class="import-ico" aria-hidden="true">飞</span>
++        <span class="import-name">飞书收藏表情（扫码导入）</span>
+       </button>
+ 
+       <button class="import-row" onclick="openTGImportDialog()">
+@@ -761,6 +766,18 @@
+   </div>
+ </div>
+ 
++<div id="feishu-import-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);align-items:center;justify-content:center;z-index:400">
++  <div role="dialog" aria-modal="true" aria-labelledby="feishu-import-title" style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:12px;padding:24px;width:420px;max-width:90vw;max-height:90vh;overflow:auto;text-align:center">
++    <h3 id="feishu-import-title">飞书收藏表情</h3>
++    <p id="feishu-import-message" role="status" aria-live="polite">扫码后自动下载并导入收藏表情。</p>
++    <img id="feishu-import-qr" alt="使用手机飞书扫描此登录二维码" style="display:none;width:280px;max-width:100%;background:white;padding:8px">
++    <progress id="feishu-import-progress" max="100" value="0" style="width:100%;display:none"></progress>
++    <p id="feishu-import-result" style="font-size:12px;word-break:break-all"></p>
++    <p style="font-size:12px;color:var(--muted)">无需打开 Mac 收藏面板。每次导入需扫码。大量收藏的返回上限尚未验证。</p>
++    <button id="feishu-import-start" class="btn btn-primary btn-sm" onclick="startFeishuImport()">开始扫码导入</button>
++    <button id="feishu-import-close" class="btn btn-secondary btn-sm" onclick="closeFeishuImportDialog()">关闭</button>
++  </div>
++</div>
+ <script src="/settings.js" defer></script>
+ </body>
+ </html>
+--- a/src/webui/settings.js
++++ b/src/webui/settings.js
+@@ -66,7 +66,7 @@
+   }
+ }
+ // 找当前可见覆盖层（静态 HTML + 动态创建的 update/confirm 弹窗）
+-const _SETTINGS_OVERLAY_IDS = ['lan-confirm-overlay','danger-overlay','sync-progress-overlay','lan-progress-overlay','sync-done-overlay','storage-migrate-overlay','backup-progress-overlay','qq-import-overlay','qqnt-overlay','tg-import-overlay','dy-import-overlay','wechat-import-overlay','update-overlay'];
++const _SETTINGS_OVERLAY_IDS = ['lan-confirm-overlay','danger-overlay','sync-progress-overlay','lan-progress-overlay','sync-done-overlay','storage-migrate-overlay','backup-progress-overlay','qq-import-overlay','qqnt-overlay','tg-import-overlay','dy-import-overlay','wechat-import-overlay','feishu-import-overlay','update-overlay'];
+ function visibleSettingsOverlay() {
+   for (const id of _SETTINGS_OVERLAY_IDS) {
+     const el = document.getElementById(id);
+@@ -2127,6 +2127,11 @@
+       lanConfirm(false);
+       return;
+     }
++    const feishuOverlay = document.getElementById('feishu-import-overlay');
++    if (feishuOverlay && feishuOverlay.style.display === 'flex') {
++      closeFeishuImportDialog();
++      return;
++    }
+     const dyOverlay = document.getElementById('dy-import-overlay');
+     if (dyOverlay && dyOverlay.style.display === 'flex') {
+       closeDYOverlay();
+@@ -2654,3 +2659,114 @@
+   initDirtyTracking();
+   initPlugins();
+ });
++
++
++/* 飞书导入：沿用设置页 API 桥接和后台任务轮询。 */
++let feishuPollTimer = null;
++let feishuPollGeneration = 0;
++let feishuBusy = false;
++let feishuGeneration = 0;
++
++function stopFeishuPoll() {
++  feishuPollGeneration++;
++  if (feishuPollTimer !== null) clearTimeout(feishuPollTimer);
++  feishuPollTimer = null;
++}
++
++function renderFeishuState(s) {
++  if (Number.isInteger(s.generation)) feishuGeneration = s.generation;
++  feishuBusy = !!s.busy;
++  document.getElementById('feishu-import-message').textContent = s.message || '尚未开始';
++  const qr = document.getElementById('feishu-import-qr');
++  if (s.qr_src && s.status === 'waiting_scan' && s.qr_src.startsWith('data:image/svg+xml;base64,')) {
++    qr.src = s.qr_src;
++    qr.style.display = '';
++  } else {
++    qr.removeAttribute('src');
++    qr.style.display = 'none';
++  }
++  const progress = document.getElementById('feishu-import-progress');
++  progress.style.display = s.total ? '' : 'none';
++  progress.value = s.total ? Math.min(100, 100 * (s.done || 0) / s.total) : 0;
++  document.getElementById('feishu-import-start').disabled = feishuBusy;
++  document.getElementById('feishu-import-start').textContent = s.status === 'idle' ? '开始扫码导入' : '重新扫码导入';
++  document.getElementById('feishu-import-close').textContent = feishuBusy ? '取消导入' : '关闭';
++  const r = s.result;
++  const reasons = {qr_expired:'二维码已过期，请重新扫码。', qr_timeout:'扫码超时，请重新扫码。', snapshot_changed:'导出期间收藏发生变化，请重新导入。', http_status_401:'登录授权失效，请重新扫码。', http_status_403:'访问被拒绝，请稍后重试。', http_status_429:'请求过于频繁，请稍后重试。'};
++  document.getElementById('feishu-import-result').textContent = r
++    ? `新增 ${r.ids.length} · 重复 ${r.skipped_dup} · 拒绝 ${r.rejected} · 未确认 ${r.unaccounted}`
++    : s.reason ? (reasons[s.reason] || '请查看导出报告中的失败记录。') : '';
++  if (s.export_dir) document.getElementById('feishu-import-result').textContent += `\n导出目录：${s.export_dir}`;
++}
++
++async function pollFeishuImport(generation) {
++  if (generation !== feishuPollGeneration) return;
++  try {
++    const state = await api('get_feishu_import_progress');
++    if (generation !== feishuPollGeneration) return;
++    if (!state) throw new Error('bridge unavailable');
++    renderFeishuState(state);
++    if (state.busy) feishuPollTimer = setTimeout(() => pollFeishuImport(generation), 700);
++    else if (state.result?.ids?.length) {
++      await Promise.allSettled([api('refresh_memes'), api('refresh_collections')]);
++    }
++  } catch (_) {
++    if (generation !== feishuPollGeneration) return;
++    renderFeishuState({status:'error', busy:true, message:'连接中断。请取消任务后重新打开。'});
++  }
++}
++
++async function openFeishuImportDialog() {
++  stopFeishuPoll();
++  document.getElementById('feishu-import-overlay').style.display = 'flex';
++  renderFeishuState({status:'loading', busy:true, message:'正在读取任务状态'});
++  await pollFeishuImport(feishuPollGeneration);
++}
++
++async function startFeishuImport() {
++  if (feishuBusy) return;
++  stopFeishuPoll();
++  const generation = feishuPollGeneration;
++  renderFeishuState({status:'running', busy:true, message:'正在启动'});
++  try {
++    const result = await api('start_feishu_import', feishuGeneration);
++    if (generation !== feishuPollGeneration) return;
++    if (!result || !result.ok) {
++      renderFeishuState({status:'error', busy:false, message:result?.error || '启动失败'});
++      return;
++    }
++    await pollFeishuImport(generation);
++  } catch (_) {
++    if (generation === feishuPollGeneration) {
++      renderFeishuState({status:'error', busy:false, message:'启动失败，请重新打开'});
++    }
++  }
++}
++
++async function closeFeishuImportDialog() {
++  if (feishuBusy) {
++    stopFeishuPoll();
++    const generation = feishuPollGeneration;
++    renderFeishuState({status:'cancelling', busy:true, message:'正在取消，请等待当前读取结束'});
++    try {
++      const result = await api('cancel_feishu_import', feishuGeneration);
++      if (generation !== feishuPollGeneration) return;
++      if (!result?.ok) throw new Error('cancel failed');
++      await pollFeishuImport(generation);
++    } catch (_) {
++      if (generation === feishuPollGeneration) {
++        renderFeishuState({status:'error', busy:true, message:'取消未确认。请关闭设置窗口停止任务。'});
++      }
++    }
++    return;
++  }
++  stopFeishuPoll();
++  renderFeishuState({status:'idle', busy:false});
++  document.getElementById('feishu-import-overlay').style.display = 'none';
++}
++
++window.addEventListener('beforeunload', () => {
++  stopFeishuPoll();
++  if (feishuBusy) api('cancel_feishu_import', feishuGeneration);
++  document.getElementById('feishu-import-qr')?.removeAttribute('src');
++});
+--- a/src/webui.py
++++ b/src/webui.py
+@@ -2955,6 +2955,58 @@
+     def cancel_tg_import(self):
+         tg_stickers.cancel_tg_import()
+ 
++    def start_feishu_import(self, generation):
++        """启动独立扫码的飞书收藏导入。"""
++        try:
++            from feishu_adapter.desktop import ImportJob
++
++            with self._webui._feishu_job_lock:
++                if (
++                    type(generation) is not int
++                    or generation != self._webui._feishu_next_generation
++                ):
++                    return {"ok": False, "error": "启动请求已失效，请重新打开导入弹窗"}
++                if self._webui._feishu_job is None:
++                    self._webui._feishu_job = ImportJob(
++                        self._webui._do_import,
++                        self._webui.ensure_import_collection,
++                        self._cfg.data_dir / "feishu_exports",
++                    )
++                result = self._webui._feishu_job.start()
++                if result.get("ok"):
++                    self._webui._feishu_run_generation = generation
++                    self._webui._feishu_next_generation += 1
++                return result
++        except ImportError:
++            return {
++                "ok": False,
++                "error": "飞书 Adapter 尚未安装，请安装随补丁提供的 wheel",
++            }
++
++    def get_feishu_import_progress(self):
++        """读取飞书任务状态，二维码只经内存桥接传递。"""
++        with self._webui._feishu_job_lock:
++            job = self._webui._feishu_job
++            state = job.state() if job else {"status": "idle", "busy": False}
++            state["generation"] = (
++                self._webui._feishu_run_generation
++                if state["busy"]
++                else self._webui._feishu_next_generation
++            )
++            return state
++
++    def cancel_feishu_import(self, generation=None):
++        """请求取消飞书导入。"""
++        with self._webui._feishu_job_lock:
++            if generation is None or generation == self._webui._feishu_next_generation:
++                self._webui._feishu_next_generation += 1
++            job = self._webui._feishu_job
++            if job and (
++                generation is None or generation == self._webui._feishu_run_generation
++            ):
++                return job.cancel()
++            return {"ok": True}
++
+     def start_douyin_import(self, cookie: str) -> dict:
+         """启动抖音表情包下载导入（全部下载）"""
+         try:
+@@ -4019,6 +4071,10 @@
+         self._port = self._find_free_port()
+         self._bottle_thread = None
+         self._api = JsApi(self)
++        self._feishu_job = None
++        self._feishu_next_generation = 0
++        self._feishu_run_generation = -1
++        self._feishu_job_lock = threading.RLock()
+         self._settings_api = SettingsApi(self)
+         self._visible = False
+         self._started = False
+@@ -4977,7 +5033,7 @@
+                         sy = my + (mh - sh) // 2
+                 except Exception:
+                     sx = sy = None
+-            self._settings_window = webview.create_window(
++            settings_window = webview.create_window(
+                 "设置 - OhMyMeme",
+                 settings_url,
+                 js_api=self._settings_api,
+@@ -4989,10 +5045,19 @@
+                 frameless=True,
+                 easy_drag=False,
+             )
++            with self._feishu_job_lock:
++                self._settings_window = settings_window
++            settings_window.events.closed += self._on_feishu_settings_closed
+             return True
+         except Exception as e:
+             logger.warning(f"create settings window error: {e}")
+             return False
++
++    def _on_feishu_settings_closed(self, window):
++        # 忽略旧设置窗口迟到的关闭事件。
++        with self._feishu_job_lock:
++            if window is self._settings_window:
++                self._settings_api.cancel_feishu_import()
+ 
+     def _save_settings_window_size(self):
+         """设置窗口销毁前持久化尺寸（下次打开沿用）"""
+@@ -5023,6 +5088,7 @@
+             pass
+ 
+     def close_settings(self):
++        self._settings_api.cancel_feishu_import()
+         if self._settings_window:
+             self._save_settings_window_size()
+             try:
+@@ -5074,6 +5140,7 @@
+             pass
+ 
+     def stop(self):
++        self._settings_api.cancel_feishu_import()
+         self._save_window_position()
+         if self._window:
+             try:

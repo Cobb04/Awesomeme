@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.spec
+.venv/
+
+# OhMyMeme 本地数据
+config.json
+*.db
+cache/
+thumbnails/
+ftp_test/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.zcode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ADB 自动下载
+.adb/
+
+# 本地契约校验脚本（不上传，个人使用）
+scripts/check_contract.py
+
+# 打包输出
+*.exe
+*.AppImage
+*.deb
+*.rpm
+*.dmg
+nuitka-crash-report.xml
+cookie.txt
+uv.lock
+node_modules/
+src/webui/dist/

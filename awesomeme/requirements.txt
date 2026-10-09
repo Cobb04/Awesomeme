@@ -1,0 +1,38 @@
+# Awesomeme 依赖
+# 核心依赖
+Pillow>=10.0.0              # 图片处理
+pywebview==6.2.1            # WebView 现代化 UI
+pystray>=0.19.0             # 系统托盘
+pyperclip>=1.8.2            # 剪贴板
+bottle>=0.13.0              # HTTP 服务器（pywebview 依赖，也用于本地路由）
+
+# 全局快捷键
+keyboard>=0.13.5
+
+# 加密（可选，不装则使用降级加密）
+cryptography>=41.0.0
+
+# Telegram 缓存解密
+tgcrypto>=1.2.5
+
+# 抖音表情导入（ABogus 签名）
+gmssl>=3.2.2
+curl_cffi>=0.7.4
+
+# S3 兼容存储
+boto3>=1.28.0
+
+# 中文分组拼音排序（可选，缺失时按原名排序）
+pypinyin>=0.50.0
+
+# 打包
+pyinstaller>=6.0.0
+
+# 三个平台的来源 Adapter 先从仓库根目录安装：pip install -e ..
+
+# macOS 原生热键、面板和图片剪贴板
+pyobjc-core==12.2.2; sys_platform == "darwin"
+pyobjc-framework-Cocoa==12.2.2; sys_platform == "darwin"
+pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices==12.2.2; sys_platform == "darwin"
+pyobjc-framework-CoreText==12.2.2; sys_platform == "darwin"
